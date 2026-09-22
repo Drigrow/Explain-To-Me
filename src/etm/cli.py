@@ -283,6 +283,10 @@ def latex_to_terminal(markup: str) -> str:
             # Normalise only inside a math delimiter, never in ordinary prose.
             formula = normalise_math_macros(match.group(1).replace("\\\\", "\\"))
             converted = latex_to_unicode(normalise_fractions(formula)).strip()
+            # The converter occasionally leaves grouping braces around a Unicode
+            # superscript/subscript token (notably `^{∞}`). They add no meaning
+            # in terminal output, so remove only these remaining math groups.
+            converted = re.sub(r"\{([^{}]+)\}", r"\1", converted)
         except Exception:
             return original
         if not converted or "\\" in converted:

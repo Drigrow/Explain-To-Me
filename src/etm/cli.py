@@ -174,7 +174,7 @@ def stream_openrouter(
     }).encode("utf-8")
     request = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json",
-        "User-Agent": "etm-openrouter/0.2.0",
+        "User-Agent": "etm-openrouter/0.3.0",
     })
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -290,7 +290,10 @@ class LiveDashboard:
         # Live can only redraw output which still fits above the cursor. Rendering
         # an ever-growing full response causes terminals to scroll each frame.
         # A constant-height tail preview keeps every frame safely replaceable.
-        self.panel_height = 14
+        # Fit every selected model into the current terminal. Previously three
+        # 14-line panels could exceed its height, and Rich hid the last panel.
+        available_rows = max(6, CONSOLE.size.height - 3)
+        self.panel_height = max(6, min(14, available_rows // max(1, len(labels))))
         self.live: Live | None = None
         if self.enabled:
             self.live = Live(
@@ -340,7 +343,7 @@ class LiveDashboard:
         # very long before it emits a newline. Then retain the most recent lines.
         content = content[-1600:]
         lines = content.splitlines()
-        preview = "\n".join(lines[-9:])
+        preview = "\n".join(lines[-max(2, self.panel_height - 4):])
         return preview or content[-500:]
 
     def clear(self) -> None:

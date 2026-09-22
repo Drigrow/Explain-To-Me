@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "etm-openrouter"
-version = "0.2.0"
+version = "0.3.0"
 description = "Explain to me: a small OpenRouter CLI for macOS Terminal"
 requires-python = ">=3.10"
 authors = [{ name = "etm user" }]

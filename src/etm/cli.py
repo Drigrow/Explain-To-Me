@@ -189,15 +189,27 @@ def resolve_model(value: str, config: dict[str, Any]) -> str:
     return config["models"].get(value, value)
 
 
+def answer_instruction(detailed: bool, answer_language: str | None) -> str:
+    instruction = DETAILED_ANSWER_INSTRUCTION if detailed else SHORT_ANSWER_INSTRUCTION
+    if not answer_language:
+        return instruction
+    requested = LANGUAGES[answer_language]
+    # Replace—not append to—the default "user's language" instruction. Appending
+    # created contradictory system guidance for e.g. `etm en 傅立叶变换`.
+    return instruction.replace(
+        "Reply in the user's language.",
+        f"Respond entirely in {requested}. Translate the user's question as needed. "
+        f"Do not answer in any other language.",
+    )
+
+
 def stream_openrouter(
     question: str, model: str, config: dict[str, Any], key: str, timeout: int, detailed: bool = False,
     answer_language: str | None = None, history: list[dict[str, str]] | None = None,
 ):
     """Yield content deltas from OpenRouter's OpenAI-compatible SSE endpoint."""
     url = config["base_url"].rstrip("/") + "/chat/completions"
-    instruction = DETAILED_ANSWER_INSTRUCTION if detailed else SHORT_ANSWER_INSTRUCTION
-    if answer_language:
-        instruction += f" Always answer in {LANGUAGES[answer_language]}, regardless of the question's language."
+    instruction = answer_instruction(detailed, answer_language)
     body = json.dumps({
         "model": model,
         "stream": True,

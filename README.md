@@ -1,56 +1,85 @@
 # etm — Explain To Me
 
-一个小型 macOS Terminal 工具，通过 OpenRouter 向一个或多个模型提问。它使用 [`rich`](https://github.com/Textualize/rich) 渲染 Markdown；API key 保存在 macOS Keychain，不写入配置文件。
+<p align="center"><strong>Ask several AI models from your terminal. Compare their answers. Keep the useful context.</strong></p>
 
-## 安装
+<p align="center">
+  <a href="https://github.com/Drigrow/Explain-To-Me/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-0b7f5b.svg" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776AB.svg" alt="Python 3.10 or later">
+  <img src="https://img.shields.io/badge/models-via%20OpenRouter-7B61FF.svg" alt="OpenRouter">
+</p>
 
-需要 Python 3.10+。此机器的 `python3` 是系统自带 3.9，请使用已安装的 Python 3.11：
+`etm` is a small macOS terminal assistant for asking one or more OpenRouter models at once. It streams answers live, renders Markdown and readable LaTeX, compares multiple perspectives, and lets you continue the latest conversation without losing context.
 
 ```zsh
+etm gpt opus ds what is a business model canvas
+```
+
+## Why etm?
+
+| Instead of… | etm gives you… |
+| --- | --- |
+| Opening several model tabs | Parallel answers from the models you choose |
+| Manually comparing long responses | A final synthesis of agreement, differences, and uncertainty |
+| Losing a useful thread | `etm continue` with the previous model-specific context |
+| Plain, interleaved terminal output | A stable live Markdown interface that does not tear or scroll repeatedly |
+
+## Quick start
+
+Requires Python 3.10 or later.
+
+```zsh
+git clone git@github.com:Drigrow/Explain-To-Me.git
+cd Explain-To-Me
 python3.11 -m pip install --user .
+
+# Your key is entered without echo and stored in the macOS Keychain on first use.
+etm what are TAM, SAM, and SOM?
 ```
 
-若安装后找不到 `etm`，将 Python user bin 加入 `PATH`（macOS 常见路径是 `~/Library/Python/3.x/bin`），或使用：
+`etm` first checks `OPENROUTER_API_KEY` (including a local `.env` file), then the macOS Keychain. To enter or replace a key explicitly:
 
 ```zsh
-python3.11 -m pip install --user --editable .
+etm config set-key
 ```
 
-第一次运行时会隐藏输入 API key，并保存到 macOS Keychain；也可先运行 `etm config set-key`。已有的 `OPENROUTER_API_KEY` 或当前目录 `.env` 中的同名键会优先使用，且不会重复保存。
-
-更新已安装版本：
+## Everyday usage
 
 ```zsh
-python3.11 -m pip install --user --upgrade .
-```
+# Default model: Gemini Flash
+etm what is TAM SAM SOM
 
-## 使用
+# Pick one model
+etm gpt what is SWOT
 
-```zsh
-etm what is tam sam som
-etm gpt what is swot
-etm gpt opus ds what is bmc
-etm detailed what is tam sam som
-etm --detailed gpt opus ds what is bmc
-etm config set-language zh
-etm zh what is swot
-etm --lang ja gpt what is swot
+# Compare models in parallel, then synthesize the answers
+etm gpt opus ds what is BMC
+
+# Ask for a more thorough answer
+etm detailed gpt what is a business model canvas
+
+# Force the answer language, independent of the question language
+etm zh gpt opus what is SWOT
+
+# Continue the latest conversation with its saved context
 etm continue give me a concrete example
 ```
 
-- 没有模型前缀时，使用默认 `gemini`（`~google/gemini-flash-latest`）。
-- 单个模型前缀只显示它的回答。
-- 两个以上模型并行回答，再用默认 `gemini` 生成“共同点 / 不同点 / 结论”综合。
-- 默认使用短、快、结论优先的回答；将 `detailed` 放在命令最前，或添加 `--detailed`，可切换为包含背景、推理、示例、假设和注意事项的详细回答。该设置同样应用于多模型综合。
-- Interface language defaults to English. Change it with `etm config set-language CODE`; supported codes are `en`, `zh`, `ja`, `ko`, `es`, `fr`, and `de`. This changes the CLI and streaming UI, not the language used by models to answer.
-- To force a response language, put a supported language code first: `etm zh what is swot`. It applies to every selected model and the final synthesis, even when the question is written in another language. `--lang CODE` is the equivalent explicit form.
-- `etm continue FOLLOW-UP` continues the most recent conversation, automatically reusing its models, detailed setting, response language, and each model's own prior messages. The latest conversation is stored locally at `~/.config/etm/state.json` with owner-only permissions; it contains no API key and is removed by `etm config uninstall --yes`.
-- 所有回答都是流式请求。交互式 Terminal 中会以单一、固定高度的 Rich `Live` 面板实时渲染各模型的最新 Markdown/LaTeX 内容，工作线程不会直接写终端，因此并发 token 不会交错、重复或撕裂；完成后再输出完整结果。终端够宽时模型会分栏显示，不够宽则自动纵向排列。
-- 回答和综合结论支持 Markdown 渲染，包括标题、列表、表格、引用和代码块。`$...$`、`$$...$$`、`\\(...\\)` 与 `\\[...\\]` 中的 LaTeX 数学式会转换为终端可读的 Unicode 数学符号；无法转换时保留原始公式。重定向到文件/管道时仍输出可读的纯文本结果。
+## Features
 
-预置别名：
+| Feature | What it does |
+| --- | --- |
+| **Multi-model comparison** | Runs selected models concurrently and synthesizes multiple answers automatically. |
+| **Live streaming UI** | Uses a single Rich live renderer, so concurrent output stays readable. |
+| **Markdown and LaTeX** | Renders headings, lists, tables, code blocks, and common LaTeX math as terminal-friendly Unicode. |
+| **Short or detailed answers** | Default answers are concise. Add `detailed` or `--detailed` for richer explanations. |
+| **Response language control** | Prefix a request with `en`, `zh`, `ja`, `ko`, `es`, `fr`, or `de`; use `--lang CODE` when preferred. |
+| **Interface language control** | Set the CLI UI independently with `etm config set-language CODE`. |
+| **Conversation continuation** | `etm continue` reuses the models, answer settings, and recent context from the last conversation. |
+| **Secure key storage** | API keys live in macOS Keychain rather than the project configuration file. |
 
-| 别名 | OpenRouter model ID |
+## Included model aliases
+
+| Alias | Model ID |
 | --- | --- |
 | `gemini` | `~google/gemini-flash-latest` |
 | `gpt` | `~openai/gpt-sol-latest` |
@@ -58,35 +87,45 @@ etm continue give me a concrete example
 | `opus` | `~anthropic/claude-opus-latest` |
 | `sonnet` | `~anthropic/claude-sonnet-latest` |
 
-完整 model ID 也可以用于配置值；在 zsh 中请用单引号包住开头的 `~`，例如 `etm --synth '~anthropic/claude-sonnet-latest' gpt opus 问题`。
-
-## 配置
+Add, replace, or remove aliases at any time:
 
 ```zsh
-etm config show
-etm config set-key
-etm config delete-key
 etm config set-model fast '~google/gemini-flash-latest'
-etm config set-model gpt '~openai/gpt-sol-latest'
 etm config set-default fast
 etm config set-synth sonnet
-etm config set-base-url https://openrouter.ai/api/v1
-etm config set-language zh
 etm config delete-model fast
 ```
 
-配置文件为 `~/.config/etm/config.json`（权限为仅当前用户可读写）；其中不含 API key。彻底移除配置与 Keychain 密钥：
+> Quote model IDs beginning with `~` in zsh so the shell does not treat them as a path.
+
+## Configuration
+
+```zsh
+etm config show
+etm config set-base-url https://openrouter.ai/api/v1
+etm config set-language en
+etm config set-key
+etm config delete-key
+```
+
+Configuration is stored at `~/.config/etm/config.json` with owner-only permissions. The latest conversation is stored separately at `~/.config/etm/state.json`; it contains no API key and retains a bounded amount of recent context per model.
+
+To remove the configuration, conversation state, and Keychain item:
 
 ```zsh
 etm config uninstall --yes
 ```
 
-## 开发与发布
+## Development
 
-本仓库不会跟踪 API key、`.env`、虚拟环境或构建产物。安装开发版本：
+Install an editable development version:
 
 ```zsh
 python3.11 -m pip install --user --editable .
 ```
 
-采用 [MIT License](LICENSE)。发布到 GitHub 后，可按需将实际仓库地址添加到 `pyproject.toml` 的 `[project.urls]`。
+The repository intentionally ignores API keys, `.env` files, virtual environments, caches, and build artifacts.
+
+## License
+
+Released under the [MIT License](LICENSE).

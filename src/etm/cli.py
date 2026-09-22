@@ -23,6 +23,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 from unicodeitplus import replace as latex_to_unicode
+from .i18n import LANGUAGES, tr
 
 
 APP_DIR = Path.home() / ".config" / "etm"
@@ -33,6 +34,7 @@ DEFAULTS: dict[str, Any] = {
     "base_url": "https://openrouter.ai/api/v1",
     "default_model": "gemini",
     "synthesis_model": "gemini",
+    "language": "en",
     "models": {
         "gemini": "~google/gemini-flash-latest",
         "gpt": "~openai/gpt-sol-latest",
@@ -67,7 +69,7 @@ def load_config() -> dict[str, Any]:
         saved = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise EtmError(f"无法读取配置 {CONFIG_PATH}: {exc}") from exc
-    for key in ("base_url", "default_model", "synthesis_model"):
+    for key in ("base_url", "default_model", "synthesis_model", "language"):
         if isinstance(saved.get(key), str):
             config[key] = saved[key]
     if isinstance(saved.get("models"), dict):
@@ -254,14 +256,14 @@ def latex_to_terminal(markup: str) -> str:
     return "".join(fenced_parts)
 
 
-def markdown_renderable(content: str) -> Markdown:
-    return Markdown(latex_to_terminal(clean_terminal_text(content)) or "_没有返回内容_")
+def markdown_renderable(content: str, language: str = "en") -> Markdown:
+    return Markdown(latex_to_terminal(clean_terminal_text(content)) or tr(language, "no_content"))
 
 
-def print_section(title: str, content: str) -> None:
+def print_section(title: str, content: str, language: str = "en") -> None:
     """Render completed model output as Markdown, including tables and code blocks."""
     CONSOLE.rule(title)
-    CONSOLE.print(markdown_renderable(content))
+    CONSOLE.print(markdown_renderable(content, language))
 
 
 ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\a]*(?:\a|\x1b\\))")
@@ -279,11 +281,12 @@ class LiveDashboard:
     interleave or leave a half-drawn terminal frame.
     """
 
-    def __init__(self, labels: list[str]) -> None:
+    def __init__(self, labels: list[str], language: str = "en") -> None:
         self.enabled = CONSOLE.is_terminal
         self.labels = labels
+        self.language = language
         self.buffers = {label: "" for label in labels}
-        self.status = {label: "等待中" for label in labels}
+        self.status = {label: tr(language, "waiting") for label in labels}
         # Live can only redraw output which still fits above the cursor. Rendering
         # an ever-growing full response causes terminals to scroll each frame.
         # A constant-height tail preview keeps every frame safely replaceable.
@@ -313,10 +316,10 @@ class LiveDashboard:
                 # Render the current tail on every refresh. Markdown gracefully
                 # tolerates unfinished constructs while a model is still writing;
                 # the fixed panel height keeps this from scrolling the terminal.
-                markdown_renderable(self._tail_preview(label)),
+                markdown_renderable(self._tail_preview(label), self.language),
                 title=label,
-                subtitle=f"{self.status[label]} · 实时 Markdown 预览",
-                border_style="cyan" if self.status[label] not in {"失败"} else "red",
+                subtitle=f"{self.status[label]} · {tr(self.language, 'preview')}",
+                border_style="cyan" if self.status[label] != tr(self.language, "failed") else "red",
                 padding=(0, 1),
                 height=self.panel_height,
             )
@@ -325,14 +328,14 @@ class LiveDashboard:
         # Rich automatically adapts: several columns on a wide screen, stacked
         # panels on narrow terminals. Live remains the only terminal writer.
         return Group(
-            Text("etm · 并发流式回答（Ctrl-C 取消；完成后显示完整 Markdown）", style="bold"),
+            Text(tr(self.language, "app"), style="bold"),
             Columns(panels, equal=True, expand=True),
         )
 
     def _tail_preview(self, label: str) -> str:
         content = clean_terminal_text(self.buffers[label])
         if not content:
-            return "等待回复…"
+            return tr(self.language, "waiting")
         # Keep a bounded character count as a single streaming paragraph can be
         # very long before it emits a newline. Then retain the most recent lines.
         content = content[-1600:]
@@ -348,9 +351,10 @@ class LiveDashboard:
 
 def run_question(args: argparse.Namespace) -> int:
     config = load_config()
+    language = config["language"] if config["language"] in LANGUAGES else "en"
     tokens = list(args.tokens)
     if not tokens:
-        raise EtmError("请提供问题，例如：etm what is TAM SAM SOM")
+        raise EtmError(tr(language, "missing_question"))
     # `detailed` is a convenient positional keyword; --detailed is the
     # unambiguous alternative when the question itself starts with that word.
     detailed = args.detailed
@@ -367,15 +371,15 @@ def run_question(args: argparse.Namespace) -> int:
     resolved = [(alias, resolve_model(alias, config)) for alias in selected]
     key = get_api_key()
     labels = [f"{alias} · {model}" for alias, model in resolved]
-    dashboard = LiveDashboard(labels)
+    dashboard = LiveDashboard(labels, language)
     events: queue.Queue[tuple[str, str, str]] = queue.Queue()
 
     def consume(label: str, model: str, prompt: str) -> None:
-        events.put((label, "status", "连接中"))
+        events.put((label, "status", tr(language, "connecting")))
         try:
             for delta in stream_openrouter(prompt, model, config, key, args.timeout, detailed):
                 events.put((label, "delta", delta))
-            events.put((label, "status", "完成"))
+            events.put((label, "status", tr(language, "complete")))
         except Exception as exc:
             events.put((label, "error", str(exc)))
 
@@ -387,9 +391,9 @@ def run_question(args: argparse.Namespace) -> int:
             try:
                 label, kind, value = events.get(timeout=0.05)
                 if kind == "delta":
-                    dashboard.update(label, delta=value, status="回答中")
+                    dashboard.update(label, delta=value, status=tr(language, "answering"))
                 elif kind == "error":
-                    dashboard.update(label, delta=f"\n[请求失败] {value}", status="失败")
+                    dashboard.update(label, delta=f"\n[request failed] {value}", status=tr(language, "failed"))
                 else:
                     dashboard.update(label, status=value)
             except queue.Empty:
@@ -406,9 +410,9 @@ def run_question(args: argparse.Namespace) -> int:
             except queue.Empty:
                 break
             if kind == "delta":
-                dashboard.update(label, delta=value, status="回答中")
+                dashboard.update(label, delta=value, status=tr(language, "answering"))
             elif kind == "error":
-                dashboard.update(label, delta=f"\n[请求失败] {value}", status="失败")
+                dashboard.update(label, delta=f"\n[request failed] {value}", status=tr(language, "failed"))
             else:
                 dashboard.update(label, status=value)
         dashboard.render(force=True)
@@ -416,7 +420,7 @@ def run_question(args: argparse.Namespace) -> int:
                for label, (alias, model) in zip(labels, resolved)]
     dashboard.clear()
     for alias, model, answer in answers:
-        print_section(f"{alias} · {model}", answer)
+        print_section(f"{alias} · {model}", answer, language)
     successful = [(alias, model, text) for alias, model, text in answers if not text.startswith("[请求失败]")]
     if len(successful) > 1 and not args.no_synthesis:
         synthesizer = resolve_model(args.synth or config["synthesis_model"], config)
@@ -435,18 +439,18 @@ def run_question(args: argparse.Namespace) -> int:
         try:
             # Reuse the same single-writer dashboard for the final streamed synthesis.
             synthesis_label = f"综合 · {synthesizer}"
-            synthesis_dashboard = LiveDashboard([synthesis_label])
-            synthesis_dashboard.update(synthesis_label, status="连接中")
+            synthesis_dashboard = LiveDashboard([synthesis_label], language)
+            synthesis_dashboard.update(synthesis_label, status=tr(language, "connecting"))
             for delta in stream_openrouter(prompt, synthesizer, config, key, args.timeout, detailed):
-                synthesis_dashboard.update(synthesis_label, delta=delta, status="综合中")
+                synthesis_dashboard.update(synthesis_label, delta=delta, status=tr(language, "synthesizing"))
                 synthesis_dashboard.render()
-            synthesis_dashboard.update(synthesis_label, status="完成")
+            synthesis_dashboard.update(synthesis_label, status=tr(language, "complete"))
             synthesis_dashboard.render(force=True)
             synthesis = synthesis_dashboard.buffers[synthesis_label].strip()
             synthesis_dashboard.clear()
-            print_section(f"综合 · {synthesizer}", synthesis)
+            print_section(f"Synthesis · {synthesizer}", synthesis, language)
         except Exception as exc:
-            print_section(f"综合 · {synthesizer}", f"[请求失败] {exc}")
+            print_section(f"Synthesis · {synthesizer}", f"[request failed] {exc}", language)
     return 0
 
 
@@ -466,13 +470,17 @@ def config_command(argv: list[str]) -> int:
     model.add_argument("model_id")
     remove = sub.add_parser("delete-model", help="删除模型别名")
     remove.add_argument("alias")
+    language_command = sub.add_parser("set-language", help="set the interface language")
+    language_command.add_argument("language", help="language code, e.g. en, zh, ja")
     uninstall = sub.add_parser("uninstall", help="删除 etm 配置和 Keychain 中的 key")
     uninstall.add_argument("--yes", action="store_true", help="确认删除")
     args = parser.parse_args(argv)
     config = load_config()
     if args.action == "show":
         print(json.dumps(config, indent=2, ensure_ascii=False))
-        print("\nAPI key: " + ("已在环境变量或 Keychain 中找到" if env_key() or keychain_key() else "未设置"))
+        language = config["language"] if config["language"] in LANGUAGES else "en"
+        key_state = tr(language, "api_key_set") if env_key() or keychain_key() else tr(language, "api_key_missing")
+        print("\n" + tr(language, "api_key_status") + ": " + key_state)
     elif args.action == "set-key":
         key = getpass.getpass("OpenRouter API key: ").strip()
         if not key:
@@ -503,6 +511,13 @@ def config_command(argv: list[str]) -> int:
         del config["models"][args.alias]
         save_config(config)
         print(f"已删除别名 {args.alias}。")
+    elif args.action == "set-language":
+        code = args.language.lower().replace("_", "-").split("-", 1)[0]
+        if code not in LANGUAGES:
+            raise EtmError(tr(config.get("language", "en"), "language_invalid", code=code, available=", ".join(LANGUAGES)))
+        config["language"] = code
+        save_config(config)
+        print(tr(code, "language_updated", name=LANGUAGES[code], code=code))
     elif args.action == "uninstall":
         if not args.yes:
             raise EtmError("这会删除 ~/.config/etm/config.json 和 Keychain 中的 key。请加 --yes 确认。")
@@ -525,7 +540,7 @@ def main() -> int:
             print(f"etm: {exc}", file=sys.stderr)
             return 2
     parser = argparse.ArgumentParser(
-        prog="etm", description="Explain To Me — 通过 OpenRouter 提问一个或多个模型。",
+        prog="etm", description="Explain To Me — ask one or more models through OpenRouter.",
         epilog="例：etm what is TAM SAM SOM   |   etm detailed gpt what is SWOT   |   etm gpt opus ds what is BMC",
     )
     parser.add_argument("--synth", metavar="MODEL", help="多模型综合使用的别名或完整 model ID")

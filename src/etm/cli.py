@@ -240,6 +240,12 @@ INLINE_PAREN_RE = re.compile(r"\\\((.+?)\\\)")
 FENCED_CODE_RE = re.compile(r"(```.*?```)", re.DOTALL)
 INLINE_CODE_RE = re.compile(r"(`[^`\n]*`)")
 FRACTION_RE = re.compile(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+MATH_MACROS = {
+    r"\infty": "∞", r"\omega": "ω", r"\Omega": "Ω", r"\pi": "π", r"\Pi": "Π",
+    r"\alpha": "α", r"\beta": "β", r"\gamma": "γ", r"\delta": "δ", r"\theta": "θ",
+    r"\lambda": "λ", r"\mu": "μ", r"\sigma": "σ", r"\sum": "∑", r"\prod": "∏",
+    r"\log": "log", r"\ln": "ln", r"\left": "", r"\right": "", r"\,": " ", r"\!": "",
+}
 
 
 def normalise_fractions(markup: str) -> str:
@@ -252,6 +258,16 @@ def normalise_fractions(markup: str) -> str:
     return markup
 
 
+def normalise_math_macros(formula: str) -> str:
+    """Make common macros robust inside nested superscripts/subscripts."""
+    for macro, replacement in MATH_MACROS.items():
+        formula = formula.replace(macro, replacement)
+    # unicodeitplus renders scripts more cleanly without single-level grouping
+    # braces (for example, `e^{-iωt}` -> `e⁻ⁱωt`). Preserve deeper groups.
+    formula = re.sub(r"([_^])\{([^{}]+)\}", r"\1\2", formula)
+    return formula
+
+
 def latex_to_terminal(markup: str) -> str:
     """Convert `$...$`, `$$...$$`, `\\(...\\)` and `\\[...\\]` to Unicode math.
 
@@ -262,7 +278,11 @@ def latex_to_terminal(markup: str) -> str:
     def convert(match: re.Match[str], block: bool = False) -> str:
         original = match.group(0)
         try:
-            converted = latex_to_unicode(normalise_fractions(match.group(1))).strip()
+            # Some providers escape Markdown math a second time and stream
+            # `\\omega` / `\\int` instead of standard `\omega` / `\int`.
+            # Normalise only inside a math delimiter, never in ordinary prose.
+            formula = normalise_math_macros(match.group(1).replace("\\\\", "\\"))
+            converted = latex_to_unicode(normalise_fractions(formula)).strip()
         except Exception:
             return original
         if not converted or "\\" in converted:

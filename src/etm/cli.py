@@ -161,14 +161,18 @@ def resolve_model(value: str, config: dict[str, Any]) -> str:
 
 def stream_openrouter(
     question: str, model: str, config: dict[str, Any], key: str, timeout: int, detailed: bool = False,
+    answer_language: str | None = None,
 ):
     """Yield content deltas from OpenRouter's OpenAI-compatible SSE endpoint."""
     url = config["base_url"].rstrip("/") + "/chat/completions"
+    instruction = DETAILED_ANSWER_INSTRUCTION if detailed else SHORT_ANSWER_INSTRUCTION
+    if answer_language:
+        instruction += f" Always answer in {LANGUAGES[answer_language]}, regardless of the question's language."
     body = json.dumps({
         "model": model,
         "stream": True,
         "messages": [
-            {"role": "system", "content": DETAILED_ANSWER_INSTRUCTION if detailed else SHORT_ANSWER_INSTRUCTION},
+            {"role": "system", "content": instruction},
             {"role": "user", "content": question},
         ],
     }).encode("utf-8")
@@ -361,9 +365,20 @@ def run_question(args: argparse.Namespace) -> int:
     # `detailed` is a convenient positional keyword; --detailed is the
     # unambiguous alternative when the question itself starts with that word.
     detailed = args.detailed
-    if tokens and tokens[0].lower() == "detailed":
-        detailed = True
-        tokens.pop(0)
+    answer_language = args.lang
+    if answer_language:
+        answer_language = answer_language.lower().replace("_", "-").split("-", 1)[0]
+        if answer_language not in LANGUAGES:
+            raise EtmError(tr(language, "language_invalid", code=answer_language, available=", ".join(LANGUAGES)))
+    while tokens:
+        keyword = tokens[0].lower()
+        if keyword == "detailed":
+            detailed = True
+            tokens.pop(0)
+        elif keyword in LANGUAGES:
+            answer_language = tokens.pop(0).lower()
+        else:
+            break
     aliases: list[str] = []
     while tokens and tokens[0] in config["models"]:
         aliases.append(tokens.pop(0))
@@ -380,7 +395,7 @@ def run_question(args: argparse.Namespace) -> int:
     def consume(label: str, model: str, prompt: str) -> None:
         events.put((label, "status", tr(language, "connecting")))
         try:
-            for delta in stream_openrouter(prompt, model, config, key, args.timeout, detailed):
+            for delta in stream_openrouter(prompt, model, config, key, args.timeout, detailed, answer_language):
                 events.put((label, "delta", delta))
             events.put((label, "status", tr(language, "complete")))
         except Exception as exc:
@@ -428,12 +443,17 @@ def run_question(args: argparse.Namespace) -> int:
     if len(successful) > 1 and not args.no_synthesis:
         synthesizer = resolve_model(args.synth or config["synthesis_model"], config)
         source_text = "\n\n".join(f"### {alias} ({model})\n{answer}" for alias, model, answer in successful)
+        language_rule = (
+            f"Required output language: {LANGUAGES[answer_language]}. Use it regardless of the "
+            "original question or source-answer language."
+            if answer_language else
+            "Write in the same language as the original question and the source answers. Do not translate the answer into a different language."
+        )
         prompt = textwrap.dedent(f"""\
             Original user question: {question}
 
             Below are answers from several models. Produce a reliable synthesis.
-            Important language rule: write in the same language as the original question and
-            the source answers. Do not translate the answer into a different language.
+            Important language rule: {language_rule}
             1. Lead with the most helpful conclusion;
             2. Identify points shared by the answers;
             3. Explain substantive differences, blind spots, or uncertainties;
@@ -446,7 +466,7 @@ def run_question(args: argparse.Namespace) -> int:
             synthesis_label = f"{tr(language, 'synthesis')} · {synthesizer}"
             synthesis_dashboard = LiveDashboard([synthesis_label], language)
             synthesis_dashboard.update(synthesis_label, status=tr(language, "connecting"))
-            for delta in stream_openrouter(prompt, synthesizer, config, key, args.timeout, detailed):
+            for delta in stream_openrouter(prompt, synthesizer, config, key, args.timeout, detailed, answer_language):
                 synthesis_dashboard.update(synthesis_label, delta=delta, status=tr(language, "synthesizing"))
                 synthesis_dashboard.render()
             synthesis_dashboard.update(synthesis_label, status=tr(language, "complete"))
@@ -546,11 +566,12 @@ def main() -> int:
             return 2
     parser = argparse.ArgumentParser(
         prog="etm", description="Explain To Me — ask one or more models through OpenRouter.",
-        epilog="例：etm what is TAM SAM SOM   |   etm detailed gpt what is SWOT   |   etm gpt opus ds what is BMC",
+        epilog="Examples: etm what is TAM SAM SOM | etm zh what is SWOT | etm detailed gpt what is SWOT",
     )
     parser.add_argument("--synth", metavar="MODEL", help="多模型综合使用的别名或完整 model ID")
     parser.add_argument("--no-synthesis", action="store_true", help="多模型时不生成综合结论")
     parser.add_argument("--detailed", action="store_true", help="输出详细回答（也可将 detailed 放在命令最前）")
+    parser.add_argument("--lang", metavar="CODE", help="force answer language, e.g. zh, ja, en")
     parser.add_argument("--timeout", type=int, default=90, help="每个请求的超时秒数（默认 90）")
     parser.add_argument("tokens", nargs=argparse.REMAINDER, help="可选模型别名，后接问题")
     args = parser.parse_args()

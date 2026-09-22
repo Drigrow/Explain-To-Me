@@ -42,6 +42,17 @@ DEFAULTS: dict[str, Any] = {
     },
 }
 
+SHORT_ANSWER_INSTRUCTION = (
+    "Answer concisely and directly. Lead with the answer, then give only the most useful "
+    "supporting points. Prefer 3–6 short bullets or a compact explanation; avoid unnecessary "
+    "background, repetition, and long disclaimers. Reply in the user's language."
+)
+DETAILED_ANSWER_INSTRUCTION = (
+    "Give a thorough, well-structured answer. Lead with the conclusion, then explain key "
+    "concepts, reasoning, assumptions, examples, trade-offs, and important caveats where useful. "
+    "Use Markdown headings and lists when they improve readability. Reply in the user's language."
+)
+
 
 class EtmError(Exception):
     pass
@@ -146,13 +157,18 @@ def resolve_model(value: str, config: dict[str, Any]) -> str:
     return config["models"].get(value, value)
 
 
-def stream_openrouter(question: str, model: str, config: dict[str, Any], key: str, timeout: int):
+def stream_openrouter(
+    question: str, model: str, config: dict[str, Any], key: str, timeout: int, detailed: bool = False,
+):
     """Yield content deltas from OpenRouter's OpenAI-compatible SSE endpoint."""
     url = config["base_url"].rstrip("/") + "/chat/completions"
     body = json.dumps({
         "model": model,
         "stream": True,
-        "messages": [{"role": "user", "content": question}],
+        "messages": [
+            {"role": "system", "content": DETAILED_ANSWER_INSTRUCTION if detailed else SHORT_ANSWER_INSTRUCTION},
+            {"role": "user", "content": question},
+        ],
     }).encode("utf-8")
     request = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json",
@@ -332,9 +348,15 @@ class LiveDashboard:
 
 def run_question(args: argparse.Namespace) -> int:
     config = load_config()
-    tokens = args.tokens
+    tokens = list(args.tokens)
     if not tokens:
         raise EtmError("请提供问题，例如：etm what is TAM SAM SOM")
+    # `detailed` is a convenient positional keyword; --detailed is the
+    # unambiguous alternative when the question itself starts with that word.
+    detailed = args.detailed
+    if tokens and tokens[0].lower() == "detailed":
+        detailed = True
+        tokens.pop(0)
     aliases: list[str] = []
     while tokens and tokens[0] in config["models"]:
         aliases.append(tokens.pop(0))
@@ -351,7 +373,7 @@ def run_question(args: argparse.Namespace) -> int:
     def consume(label: str, model: str, prompt: str) -> None:
         events.put((label, "status", "连接中"))
         try:
-            for delta in stream_openrouter(prompt, model, config, key, args.timeout):
+            for delta in stream_openrouter(prompt, model, config, key, args.timeout, detailed):
                 events.put((label, "delta", delta))
             events.put((label, "status", "完成"))
         except Exception as exc:
@@ -402,7 +424,7 @@ def run_question(args: argparse.Namespace) -> int:
         prompt = textwrap.dedent(f"""\
             用户的问题是：{question}
 
-            以下是不同模型对该问题的回答。请用与用户相同的语言做一个简明、可靠的综合：
+            以下是不同模型对该问题的回答。请用与用户相同的语言做一个可靠的综合：
             1. 先直接给出你认为最有帮助的结论；
             2. 列出回答的共同点；
             3. 说明实质性不同点、各自可能的盲点或不确定性；
@@ -415,7 +437,7 @@ def run_question(args: argparse.Namespace) -> int:
             synthesis_label = f"综合 · {synthesizer}"
             synthesis_dashboard = LiveDashboard([synthesis_label])
             synthesis_dashboard.update(synthesis_label, status="连接中")
-            for delta in stream_openrouter(prompt, synthesizer, config, key, args.timeout):
+            for delta in stream_openrouter(prompt, synthesizer, config, key, args.timeout, detailed):
                 synthesis_dashboard.update(synthesis_label, delta=delta, status="综合中")
                 synthesis_dashboard.render()
             synthesis_dashboard.update(synthesis_label, status="完成")
@@ -504,10 +526,11 @@ def main() -> int:
             return 2
     parser = argparse.ArgumentParser(
         prog="etm", description="Explain To Me — 通过 OpenRouter 提问一个或多个模型。",
-        epilog="例：etm what is TAM SAM SOM   |   etm gpt what is SWOT   |   etm gpt opus ds what is BMC",
+        epilog="例：etm what is TAM SAM SOM   |   etm detailed gpt what is SWOT   |   etm gpt opus ds what is BMC",
     )
     parser.add_argument("--synth", metavar="MODEL", help="多模型综合使用的别名或完整 model ID")
     parser.add_argument("--no-synthesis", action="store_true", help="多模型时不生成综合结论")
+    parser.add_argument("--detailed", action="store_true", help="输出详细回答（也可将 detailed 放在命令最前）")
     parser.add_argument("--timeout", type=int, default=90, help="每个请求的超时秒数（默认 90）")
     parser.add_argument("tokens", nargs=argparse.REMAINDER, help="可选模型别名，后接问题")
     args = parser.parse_args()

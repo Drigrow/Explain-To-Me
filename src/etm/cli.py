@@ -217,7 +217,7 @@ def stream_openrouter(
     }).encode("utf-8")
     request = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json",
-        "User-Agent": "etm-openrouter/0.4.0",
+        "User-Agent": "etm-openrouter/0.4.1",
     })
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -252,11 +252,17 @@ INLINE_PAREN_RE = re.compile(r"\\\((.+?)\\\)")
 FENCED_CODE_RE = re.compile(r"(```.*?```)", re.DOTALL)
 INLINE_CODE_RE = re.compile(r"(`[^`\n]*`)")
 FRACTION_RE = re.compile(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+SQRT_RE = re.compile(r"\\sqrt(?:\[([234])\])?\s*\{([^{}]*)\}")
+STYLE_RE = re.compile(r"\\(?:mathrm|mathit|mathbf|mathcal|mathbb|text|operatorname)\s*\{([^{}]*)\}")
 MATH_MACROS = {
-    r"\infty": "∞", r"\omega": "ω", r"\Omega": "Ω", r"\pi": "π", r"\Pi": "Π",
-    r"\alpha": "α", r"\beta": "β", r"\gamma": "γ", r"\delta": "δ", r"\theta": "θ",
-    r"\lambda": "λ", r"\mu": "μ", r"\sigma": "σ", r"\sum": "∑", r"\prod": "∏",
-    r"\log": "log", r"\ln": "ln", r"\left": "", r"\right": "", r"\,": " ", r"\!": "",
+    r"\arcsinh": "arcsinh", r"\arccosh": "arccosh", r"\arctanh": "arctanh", r"\sinh": "sinh", r"\cosh": "cosh", r"\tanh": "tanh", r"\arcsin": "arcsin", r"\arccos": "arccos", r"\arctan": "arctan", r"\sin": "sin", r"\cos": "cos", r"\tan": "tan", r"\cot": "cot", r"\sec": "sec", r"\csc": "csc", r"\exp": "exp", r"\log": "log", r"\ln": "ln", r"\max": "max", r"\min": "min",
+    r"\infty": "∞", r"\partial": "∂", r"\nabla": "∇", r"\ell": "ℓ", r"\hbar": "ℏ", r"\Gamma": "Γ", r"\Delta": "Δ", r"\Theta": "Θ", r"\Lambda": "Λ", r"\Xi": "Ξ", r"\Pi": "Π", r"\Sigma": "Σ", r"\Phi": "Φ", r"\Psi": "Ψ", r"\Omega": "Ω",
+    r"\alpha": "α", r"\beta": "β", r"\gamma": "γ", r"\delta": "δ", r"\epsilon": "ε", r"\zeta": "ζ", r"\eta": "η", r"\theta": "θ", r"\iota": "ι", r"\kappa": "κ", r"\lambda": "λ", r"\mu": "μ", r"\nu": "ν", r"\xi": "ξ", r"\pi": "π", r"\rho": "ρ", r"\sigma": "σ", r"\tau": "τ", r"\phi": "φ", r"\chi": "χ", r"\psi": "ψ", r"\omega": "ω",
+    r"\iiint": "∭", r"\iint": "∬", r"\oint": "∮", r"\int": "∫", r"\sum": "∑", r"\prod": "∏", r"\lim": "lim",
+    r"\leq": "≤", r"\geq": "≥", r"\neq": "≠", r"\approx": "≈", r"\equiv": "≡", r"\propto": "∝", r"\pm": "±", r"\mp": "∓", r"\times": "×", r"\cdot": "⋅", r"\div": "÷", r"\ast": "∗", r"\circ": "∘",
+    r"\longrightarrow": "⟶", r"\rightarrow": "→", r"\to": "→", r"\leftarrow": "←", r"\leftrightarrow": "↔", r"\Rightarrow": "⇒", r"\Leftarrow": "⇐", r"\Leftrightarrow": "⇔",
+    r"\subseteq": "⊆", r"\supseteq": "⊇", r"\subset": "⊂", r"\supset": "⊃", r"\notin": "∉", r"\in": "∈", r"\cup": "∪", r"\cap": "∩", r"\emptyset": "∅", r"\forall": "∀", r"\exists": "∃", r"\neg": "¬", r"\land": "∧", r"\lor": "∨",
+    r"\left": "", r"\right": "", r"\bigl": "", r"\bigr": "", r"\Bigl": "", r"\Bigr": "", r"\,": " ", r"\;": " ", r"\!": "", r"\quad": " ", r"\qquad": " ",
 }
 
 
@@ -272,6 +278,12 @@ def normalise_fractions(markup: str) -> str:
 
 def normalise_math_macros(formula: str) -> str:
     """Make common macros robust inside nested superscripts/subscripts."""
+    for _ in range(4):
+        updated = STYLE_RE.sub(lambda m: m.group(1), formula)
+        updated = SQRT_RE.sub(lambda m: {None: "√", "2": "√", "3": "∛", "4": "∜"}[m.group(1)] + f"({m.group(2)})", updated)
+        if updated == formula:
+            break
+        formula = updated
     for macro, replacement in MATH_MACROS.items():
         formula = formula.replace(macro, replacement)
     # unicodeitplus renders scripts more cleanly without single-level grouping

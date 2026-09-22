@@ -429,19 +429,21 @@ def run_question(args: argparse.Namespace) -> int:
         synthesizer = resolve_model(args.synth or config["synthesis_model"], config)
         source_text = "\n\n".join(f"### {alias} ({model})\n{answer}" for alias, model, answer in successful)
         prompt = textwrap.dedent(f"""\
-            用户的问题是：{question}
+            Original user question: {question}
 
-            以下是不同模型对该问题的回答。请用与用户相同的语言做一个可靠的综合：
-            1. 先直接给出你认为最有帮助的结论；
-            2. 列出回答的共同点；
-            3. 说明实质性不同点、各自可能的盲点或不确定性；
-            4. 不要把来源回答当作事实，纠正明显错误。
+            Below are answers from several models. Produce a reliable synthesis.
+            Important language rule: write in the same language as the original question and
+            the source answers. Do not translate the answer into a different language.
+            1. Lead with the most helpful conclusion;
+            2. Identify points shared by the answers;
+            3. Explain substantive differences, blind spots, or uncertainties;
+            4. Do not treat source answers as facts; correct clear errors.
 
             {source_text}
         """)
         try:
             # Reuse the same single-writer dashboard for the final streamed synthesis.
-            synthesis_label = f"综合 · {synthesizer}"
+            synthesis_label = f"{tr(language, 'synthesis')} · {synthesizer}"
             synthesis_dashboard = LiveDashboard([synthesis_label], language)
             synthesis_dashboard.update(synthesis_label, status=tr(language, "connecting"))
             for delta in stream_openrouter(prompt, synthesizer, config, key, args.timeout, detailed):
@@ -451,9 +453,9 @@ def run_question(args: argparse.Namespace) -> int:
             synthesis_dashboard.render(force=True)
             synthesis = synthesis_dashboard.buffers[synthesis_label].strip()
             synthesis_dashboard.clear()
-            print_section(f"Synthesis · {synthesizer}", synthesis, language)
+            print_section(f"{tr(language, 'synthesis')} · {synthesizer}", synthesis, language)
         except Exception as exc:
-            print_section(f"Synthesis · {synthesizer}", f"[request failed] {exc}", language)
+            print_section(f"{tr(language, 'synthesis')} · {synthesizer}", f"[request failed] {exc}", language)
     return 0
 
 

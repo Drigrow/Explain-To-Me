@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "etm-openrouter"
+version = "0.2.0"
+description = "Explain to me: a small OpenRouter CLI for macOS Terminal"
+requires-python = ">=3.10"
+authors = [{ name = "etm user" }]
+readme = "README.md"
+license = { text = "MIT" }
+keywords = ["cli", "openrouter", "markdown", "llm", "terminal"]
+dependencies = ["rich>=13.7,<15", "unicodeitplus>=0.3,<1"]
+
+[project.scripts]
+etm = "etm.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

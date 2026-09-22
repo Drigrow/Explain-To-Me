@@ -35,6 +35,7 @@ etm --detailed gpt opus ds what is bmc
 etm config set-language zh
 etm zh what is swot
 etm --lang ja gpt what is swot
+etm continue give me a concrete example
 ```
 
 - 没有模型前缀时，使用默认 `gemini`（`~google/gemini-flash-latest`）。
@@ -43,6 +44,7 @@ etm --lang ja gpt what is swot
 - 默认使用短、快、结论优先的回答；将 `detailed` 放在命令最前，或添加 `--detailed`，可切换为包含背景、推理、示例、假设和注意事项的详细回答。该设置同样应用于多模型综合。
 - Interface language defaults to English. Change it with `etm config set-language CODE`; supported codes are `en`, `zh`, `ja`, `ko`, `es`, `fr`, and `de`. This changes the CLI and streaming UI, not the language used by models to answer.
 - To force a response language, put a supported language code first: `etm zh what is swot`. It applies to every selected model and the final synthesis, even when the question is written in another language. `--lang CODE` is the equivalent explicit form.
+- `etm continue FOLLOW-UP` continues the most recent conversation, automatically reusing its models, detailed setting, response language, and each model's own prior messages. The latest conversation is stored locally at `~/.config/etm/state.json` with owner-only permissions; it contains no API key and is removed by `etm config uninstall --yes`.
 - 所有回答都是流式请求。交互式 Terminal 中会以单一、固定高度的 Rich `Live` 面板实时渲染各模型的最新 Markdown/LaTeX 内容，工作线程不会直接写终端，因此并发 token 不会交错、重复或撕裂；完成后再输出完整结果。终端够宽时模型会分栏显示，不够宽则自动纵向排列。
 - 回答和综合结论支持 Markdown 渲染，包括标题、列表、表格、引用和代码块。`$...$`、`$$...$$`、`\\(...\\)` 与 `\\[...\\]` 中的 LaTeX 数学式会转换为终端可读的 Unicode 数学符号；无法转换时保留原始公式。重定向到文件/管道时仍输出可读的纯文本结果。
 

@@ -28,6 +28,7 @@ from .i18n import LANGUAGES, tr
 
 APP_DIR = Path.home() / ".config" / "etm"
 CONFIG_PATH = APP_DIR / "config.json"
+STATE_PATH = APP_DIR / "state.json"
 KEYCHAIN_SERVICE = "etm-openrouter"
 KEYCHAIN_ACCOUNT = "openrouter-api-key"
 DEFAULTS: dict[str, Any] = {
@@ -54,6 +55,8 @@ DETAILED_ANSWER_INSTRUCTION = (
     "concepts, reasoning, assumptions, examples, trade-offs, and important caveats where useful. "
     "Use Markdown headings and lists when they improve readability. Reply in the user's language."
 )
+MAX_HISTORY_MESSAGES = 12
+MAX_HISTORY_CONTENT = 12_000
 
 
 class EtmError(Exception):
@@ -83,6 +86,33 @@ def save_config(config: dict[str, Any]) -> None:
     APP_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     CONFIG_PATH.chmod(0o600)
+
+
+def load_last_run() -> dict[str, Any] | None:
+    if not STATE_PATH.exists():
+        return None
+    try:
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        last_run = state.get("last_run")
+        return last_run if isinstance(last_run, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def save_last_run(models: list[tuple[str, str]], histories: dict[str, list[dict[str, str]]], detailed: bool, answer_language: str | None) -> None:
+    """Persist only the most recent conversation; keys remain in macOS Keychain."""
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    serialised = {
+        key: [{"role": message["role"], "content": message["content"][-MAX_HISTORY_CONTENT:]}
+              for message in messages[-MAX_HISTORY_MESSAGES:]
+              if message.get("role") in {"user", "assistant"} and isinstance(message.get("content"), str)]
+        for key, messages in histories.items()
+    }
+    STATE_PATH.write_text(json.dumps({"last_run": {
+        "models": [{"alias": alias, "model": model} for alias, model in models],
+        "histories": serialised, "detailed": detailed, "answer_language": answer_language,
+    }}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    STATE_PATH.chmod(0o600)
 
 
 def env_key() -> str | None:
@@ -161,7 +191,7 @@ def resolve_model(value: str, config: dict[str, Any]) -> str:
 
 def stream_openrouter(
     question: str, model: str, config: dict[str, Any], key: str, timeout: int, detailed: bool = False,
-    answer_language: str | None = None,
+    answer_language: str | None = None, history: list[dict[str, str]] | None = None,
 ):
     """Yield content deltas from OpenRouter's OpenAI-compatible SSE endpoint."""
     url = config["base_url"].rstrip("/") + "/chat/completions"
@@ -171,14 +201,11 @@ def stream_openrouter(
     body = json.dumps({
         "model": model,
         "stream": True,
-        "messages": [
-            {"role": "system", "content": instruction},
-            {"role": "user", "content": question},
-        ],
+        "messages": [{"role": "system", "content": instruction}, *(history or []), {"role": "user", "content": question}],
     }).encode("utf-8")
     request = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json",
-        "User-Agent": "etm-openrouter/0.3.0",
+        "User-Agent": "etm-openrouter/0.4.0",
     })
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -364,6 +391,9 @@ def run_question(args: argparse.Namespace) -> int:
         raise EtmError(tr(language, "missing_question"))
     # `detailed` is a convenient positional keyword; --detailed is the
     # unambiguous alternative when the question itself starts with that word.
+    continuing = bool(tokens and tokens[0].lower() == "continue")
+    if continuing:
+        tokens.pop(0)
     detailed = args.detailed
     answer_language = args.lang
     if answer_language:
@@ -380,22 +410,36 @@ def run_question(args: argparse.Namespace) -> int:
         else:
             break
     aliases: list[str] = []
-    while tokens and tokens[0] in config["models"]:
-        aliases.append(tokens.pop(0))
+    last_run = load_last_run() if continuing else None
+    if continuing:
+        if not last_run or not isinstance(last_run.get("models"), list):
+            raise EtmError("No previous conversation found. Ask a question before using `etm continue`.")
+        detailed = args.detailed or bool(last_run.get("detailed"))
+        answer_language = answer_language or last_run.get("answer_language")
+    else:
+        while tokens and tokens[0] in config["models"]:
+            aliases.append(tokens.pop(0))
     if not tokens:
         raise EtmError("请选择模型后仍需要提供问题。")
     question = " ".join(tokens)
     selected = aliases or [config["default_model"]]
-    resolved = [(alias, resolve_model(alias, config)) for alias in selected]
+    resolved = ([(str(item["alias"]), str(item["model"])) for item in last_run["models"]
+                 if isinstance(item, dict) and isinstance(item.get("alias"), str) and isinstance(item.get("model"), str)]
+                if continuing else [(alias, resolve_model(alias, config)) for alias in selected])
+    if not resolved:
+        raise EtmError("The previous conversation has no usable model context.")
     key = get_api_key()
     labels = [f"{alias} · {model}" for alias, model in resolved]
     dashboard = LiveDashboard(labels, language)
     events: queue.Queue[tuple[str, str, str]] = queue.Queue()
+    histories = (last_run.get("histories", {}) if continuing and isinstance(last_run.get("histories"), dict) else {})
 
     def consume(label: str, model: str, prompt: str) -> None:
         events.put((label, "status", tr(language, "connecting")))
         try:
-            for delta in stream_openrouter(prompt, model, config, key, args.timeout, detailed, answer_language):
+            prior = histories.get(label, [])
+            safe_prior = prior if isinstance(prior, list) else []
+            for delta in stream_openrouter(prompt, model, config, key, args.timeout, detailed, answer_language, safe_prior):
                 events.put((label, "delta", delta))
             events.put((label, "status", tr(language, "complete")))
         except Exception as exc:
@@ -439,7 +483,12 @@ def run_question(args: argparse.Namespace) -> int:
     dashboard.clear()
     for alias, model, answer in answers:
         print_section(f"{alias} · {model}", answer, language)
-    successful = [(alias, model, text) for alias, model, text in answers if not text.startswith("[请求失败]")]
+    successful = [(alias, model, text) for alias, model, text in answers if not text.startswith("[request failed]")]
+    for alias, model, answer in successful:
+        label = f"{alias} · {model}"
+        previous = histories.get(label, [])
+        histories[label] = [*previous, {"role": "user", "content": question}, {"role": "assistant", "content": answer}]
+    save_last_run(resolved, histories, detailed, answer_language)
     if len(successful) > 1 and not args.no_synthesis:
         synthesizer = resolve_model(args.synth or config["synthesis_model"], config)
         source_text = "\n\n".join(f"### {alias} ({model})\n{answer}" for alias, model, answer in successful)
@@ -549,6 +598,8 @@ def config_command(argv: list[str]) -> int:
         deleted = delete_keychain_key()
         if CONFIG_PATH.exists():
             CONFIG_PATH.unlink()
+        if STATE_PATH.exists():
+            STATE_PATH.unlink()
         try:
             APP_DIR.rmdir()
         except OSError:
@@ -566,7 +617,7 @@ def main() -> int:
             return 2
     parser = argparse.ArgumentParser(
         prog="etm", description="Explain To Me — ask one or more models through OpenRouter.",
-        epilog="Examples: etm what is TAM SAM SOM | etm zh what is SWOT | etm detailed gpt what is SWOT",
+        epilog="Examples: etm what is TAM SAM SOM | etm zh what is SWOT | etm continue explain with an example",
     )
     parser.add_argument("--synth", metavar="MODEL", help="多模型综合使用的别名或完整 model ID")
     parser.add_argument("--no-synthesis", action="store_true", help="多模型时不生成综合结论")

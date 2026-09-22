@@ -294,9 +294,12 @@ class LiveDashboard:
     def _renderable(self) -> Group:
         panels = [
             Panel(
-                Text(self._tail_preview(label), overflow="fold"),
+                # Render the current tail on every refresh. Markdown gracefully
+                # tolerates unfinished constructs while a model is still writing;
+                # the fixed panel height keeps this from scrolling the terminal.
+                markdown_renderable(self._tail_preview(label)),
                 title=label,
-                subtitle=f"{self.status[label]} · 仅显示最新内容",
+                subtitle=f"{self.status[label]} · 实时 Markdown 预览",
                 border_style="cyan" if self.status[label] not in {"失败"} else "red",
                 padding=(0, 1),
                 height=self.panel_height,

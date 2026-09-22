@@ -268,11 +268,15 @@ class LiveDashboard:
         self.labels = labels
         self.buffers = {label: "" for label in labels}
         self.status = {label: "等待中" for label in labels}
+        # Live can only redraw output which still fits above the cursor. Rendering
+        # an ever-growing full response causes terminals to scroll each frame.
+        # A constant-height tail preview keeps every frame safely replaceable.
+        self.panel_height = 14
         self.live: Live | None = None
         if self.enabled:
             self.live = Live(
                 self._renderable(), console=CONSOLE, refresh_per_second=12,
-                transient=True, vertical_overflow="visible",
+                transient=True, vertical_overflow="ellipsis",
             )
             self.live.start(refresh=True)
 
@@ -290,17 +294,32 @@ class LiveDashboard:
     def _renderable(self) -> Group:
         panels = [
             Panel(
-                markdown_renderable(self.buffers[label]) if self.buffers[label] else Markdown("_等待回复…_"),
+                Text(self._tail_preview(label), overflow="fold"),
                 title=label,
-                subtitle=self.status[label],
+                subtitle=f"{self.status[label]} · 仅显示最新内容",
                 border_style="cyan" if self.status[label] not in {"失败"} else "red",
                 padding=(0, 1),
+                height=self.panel_height,
             )
             for label in self.labels
         ]
         # Rich automatically adapts: several columns on a wide screen, stacked
         # panels on narrow terminals. Live remains the only terminal writer.
-        return Group(Text("etm · 并发流式回答（Ctrl-C 取消）", style="bold"), Columns(panels, equal=True, expand=True))
+        return Group(
+            Text("etm · 并发流式回答（Ctrl-C 取消；完成后显示完整 Markdown）", style="bold"),
+            Columns(panels, equal=True, expand=True),
+        )
+
+    def _tail_preview(self, label: str) -> str:
+        content = clean_terminal_text(self.buffers[label])
+        if not content:
+            return "等待回复…"
+        # Keep a bounded character count as a single streaming paragraph can be
+        # very long before it emits a newline. Then retain the most recent lines.
+        content = content[-1600:]
+        lines = content.splitlines()
+        preview = "\n".join(lines[-9:])
+        return preview or content[-500:]
 
     def clear(self) -> None:
         if self.live:
